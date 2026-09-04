@@ -1,2 +1,3 @@
 # WindowsActReplay
-Windows action replay
+
+全局记录鼠标操作（移动、左/右/中键按下与抬起、纵/横滚轮、侧键）并回放
