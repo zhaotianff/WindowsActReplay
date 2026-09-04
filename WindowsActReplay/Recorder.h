@@ -2,7 +2,7 @@
 
 #include "WindowsActReplay.h"
 
-// 全局鼠标录制器：在专属录制线程上安装 WH_MOUSE_LL 低级钩子
+// 全局输入录制器：在专属录制线程上安装 WH_MOUSE_LL + WH_KEYBOARD_LL 低级钩子
 //（LL 钩子的回调在“安装线程”的消息循环里执行，因此该线程必须持续泵消息）。
 // 事件带相对时间与目标窗口上下文；UI 收到 WM_APP_REC_EVENTS 后增量拉取。
 class Recorder {
@@ -25,9 +25,12 @@ public:
 private:
     static DWORD WINAPI ThreadProc(LPVOID param);
     void ThreadMain();
-    static LRESULT CALLBACK HookProc(int nCode, WPARAM wParam, LPARAM lParam);
-    void OnHook(WPARAM wParam, LPARAM lParam);
-    WindowSnapshot CaptureContext(POINT pt);
+    static LRESULT CALLBACK MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam);
+    static LRESULT CALLBACK KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam);
+    void OnMouse(WPARAM wParam, LPARAM lParam);
+    void OnKeyboard(WPARAM wParam, LPARAM lParam);
+    WindowSnapshot CaptureContext(POINT pt);      // 鼠标：光标所在顶层窗口
+    WindowSnapshot CaptureFocusContext();         // 键盘：当前前台（焦点）顶层窗口
     const std::wstring& ProcessNameForPid(DWORD pid);
 
     HWND m_hwndNotify = nullptr;

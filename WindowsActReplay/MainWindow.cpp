@@ -37,6 +37,31 @@ namespace {
         return s.size() <= n ? s : s.substr(0, n) + L"…";
     }
 
+    std::wstring KeyName(UINT vk) {
+        switch (vk) {
+        case VK_RETURN:   return L"回车";
+        case VK_ESCAPE:   return L"Esc";
+        case VK_SPACE:    return L"空格";
+        case VK_TAB:      return L"Tab";
+        case VK_BACK:     return L"退格";
+        case VK_DELETE:   return L"Delete";
+        case VK_SHIFT:    return L"Shift";
+        case VK_CONTROL:  return L"Ctrl";
+        case VK_MENU:     return L"Alt";
+        case VK_LWIN:     return L"左Win";
+        case VK_RWIN:     return L"右Win";
+        case VK_UP:       return L"↑";
+        case VK_DOWN:     return L"↓";
+        case VK_LEFT:     return L"←";
+        case VK_RIGHT:    return L"→";
+        default: break;
+        }
+        if (vk >= 0x30 && vk <= 0x39) return std::wstring(1, static_cast<wchar_t>(vk));        // 0-9
+        if (vk >= 0x41 && vk <= 0x5A) return std::wstring(1, static_cast<wchar_t>(vk));        // A-Z
+        if (vk >= VK_F1 && vk <= VK_F24) return L"F" + std::to_wstring(vk - VK_F1 + 1);
+        return L"VK" + std::to_wstring(vk);
+    }
+
     std::wstring FormatEvent(const RecEvent& e) {
         std::wstring action;
         switch (e.type) {
@@ -51,6 +76,8 @@ namespace {
         case RecEventType::WheelH:     action = L"滚轮(横)"; break;
         case RecEventType::XDown:      action = L"侧键" + std::to_wstring(e.delta) + L"按下"; break;
         case RecEventType::XUp:        action = L"侧键" + std::to_wstring(e.delta) + L"抬起"; break;
+        case RecEventType::KeyDown:    action = L"按键 [" + KeyName(e.virtualKey) + L"] 按下"; break;
+        case RecEventType::KeyUp:      action = L"按键 [" + KeyName(e.virtualKey) + L"] 抬起"; break;
         }
         wchar_t buf[256];
         swprintf_s(buf, L"[+%.3fs] %s (%ld, %ld)", e.offsetMs / 1000.0, action.c_str(), e.pt.x, e.pt.y);
@@ -59,7 +86,7 @@ namespace {
         if (e.type == RecEventType::WheelV || e.type == RecEventType::WheelH)
             line += L"  Δ=" + std::to_wstring(e.delta);
 
-        // 移动事件太密集，仅点击/滚轮类事件附带窗口上下文
+        // 移动事件太密集，仅点击/滚轮/按键类事件附带窗口上下文
         if (e.type != RecEventType::Move && e.wnd.hwnd) {
             line += L"  |  \"" + Truncate(e.wnd.title, 24) + L"\" [" + e.wnd.className + L"] " + e.wnd.processName;
             if (e.wnd.foreground) line += L"（前台）";
@@ -105,7 +132,7 @@ namespace {
             }
             SetDlgItemTextW(hwnd, IDC_BTN_RECORD, L"停止");
             EnableWindow(GetDlgItem(hwnd, IDC_BTN_PLAY), FALSE);
-            SetStatus(hwnd, L"正在记录全局鼠标操作…（完成后点击“停止”）");
+            SetStatus(hwnd, L"正在记录全局鼠标/键盘操作…（完成后点击“停止”）");
         } else {
             g_recorder->Stop();
             DrainRecordedEvents(hwnd); // 兜底：把剩余事件全部显示出来
@@ -121,7 +148,7 @@ namespace {
         if (!g_player->IsPlaying()) {
             auto rec = g_recorder->GetRecording();
             if (!rec || rec->events.empty()) {
-                MessageBoxW(hwnd, L"还没有可回放的记录。\n请先点击“记录”并执行一些鼠标操作。",
+                MessageBoxW(hwnd, L"还没有可回放的记录。\n请先点击“记录”并执行一些鼠标/键盘操作。",
                             L"无法回放", MB_ICONINFORMATION);
                 return;
             }
@@ -134,7 +161,7 @@ namespace {
             }
             SetDlgItemTextW(hwnd, IDC_BTN_PLAY, L"停止回放");
             EnableWindow(GetDlgItem(hwnd, IDC_BTN_RECORD), FALSE);
-            SetStatus(hwnd, L"正在回放… 请勿移动鼠标或遮挡目标窗口；点击“停止回放”可中止。");
+            SetStatus(hwnd, L"正在回放… 请勿操作键盘/鼠标或遮挡目标窗口；点击“停止回放”可中止。");
         } else {
             g_player->RequestStop();
             EnableWindow(GetDlgItem(hwnd, IDC_BTN_PLAY), FALSE);
@@ -172,7 +199,7 @@ namespace {
             CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", nullptr,
                             WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
                             0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_LIST)), g_hInst, nullptr);
-            CreateWindowExW(0, L"STATIC", L"就绪。点击“记录”开始捕获全局鼠标操作。",
+            CreateWindowExW(0, L"STATIC", L"就绪。点击“记录”开始捕获全局鼠标/键盘操作。",
                             WS_CHILD | WS_VISIBLE | SS_LEFTNOWORDWRAP | SS_CENTERIMAGE,
                             0, 0, 0, 0, hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDC_STATUS)), g_hInst, nullptr);
             for (int id : { IDC_BTN_RECORD, IDC_BTN_PLAY, IDC_LIST, IDC_STATUS })

@@ -29,7 +29,7 @@
     <ClInclude Include="Common.h">
       <Filter>头文件</Filter>
     </ClInclude>
-    <ClInclude Include="HistoryRecord.h">
+    <ClInclude Include="WindowsActReplay.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="Recorder.h">
@@ -43,12 +43,12 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="HistoryRecord.rc">
+    <ResourceCompile Include="WindowsActReplay.rc">
       <Filter>资源文件</Filter>
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <Image Include="HistoryRecord.ico">
+    <Image Include="WindowsActReplay.ico">
       <Filter>资源文件</Filter>
     </Image>
   </ItemGroup>

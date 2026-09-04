@@ -234,19 +234,41 @@ void Player::ThreadMain() {
         }
 
         HWND h = ev.wnd.hwnd;
+        const bool isKey = (ev.type == RecEventType::KeyDown || ev.type == RecEventType::KeyUp);
         if (h) {
             if (!IsWindow(h)) {
                 state = PlayAborted;
                 msg = L"目标窗口 \"" + ev.wnd.title + L"\" 在回放过程中被关闭，已安全终止。";
                 break;
             }
-            // 录制时是前台窗口 -> 回放前恢复前台，避免点击落到后台窗口不产生预期效果
-            if (ev.wnd.foreground && !EnsureForeground(h)) {
+            // 录制时是前台窗口 -> 回放前恢复前台（鼠标避免点到后台窗口，键盘确保焦点正确）
+            if ((ev.wnd.foreground || isKey) && !EnsureForeground(h)) {
                 state = PlayAborted;
                 msg = L"无法将目标窗口置为前台：\"" + ev.wnd.title + L"\"。\n"
                       L"为避免在错误的窗口上操作，已安全终止。";
                 break;
             }
+        }
+
+        if (isKey) {
+            // 键盘事件：校验当前前台窗口与录制时一致，杜绝把按键打进错误窗口
+            if (h && GetForegroundWindow() != h) {
+                state = PlayAborted;
+                msg = L"当前前台窗口与录制时不一致（目标 \"" + ev.wnd.title + L"\" 未获得焦点）。\n"
+                      L"已安全终止，未注入此次按键。";
+                break;
+            }
+            INPUT in{};
+            in.type = INPUT_KEYBOARD;
+            in.ki.wVk = static_cast<WORD>(ev.virtualKey);
+            in.ki.wScan = static_cast<WORD>(ev.scanCode);
+            in.ki.dwFlags = KEYEVENTF_SCANCODE;
+            if (ev.keyExtended) in.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+            if (ev.type == RecEventType::KeyUp) in.ki.dwFlags |= KEYEVENTF_KEYUP;
+            in.ki.dwExtraInfo = kInjectMagic;
+            SetMessageExtraInfo(kInjectMagic);
+            SendInput(1, &in, sizeof(INPUT));
+            continue;
         }
 
         // 点击/滚轮类事件：校验屏幕落点窗口与录制时一致，杜绝“默默点在错误窗口”
@@ -282,6 +304,7 @@ void Player::ThreadMain() {
         case RecEventType::WheelH:     in.mi.dwFlags |= MOUSEEVENTF_HWHEEL; in.mi.mouseData = static_cast<DWORD>(ev.delta); break;
         case RecEventType::XDown:      in.mi.dwFlags |= MOUSEEVENTF_XDOWN;  in.mi.mouseData = static_cast<DWORD>(ev.delta); break;
         case RecEventType::XUp:        in.mi.dwFlags |= MOUSEEVENTF_XUP;    in.mi.mouseData = static_cast<DWORD>(ev.delta); break;
+        default: continue; // 未知类型，跳过
         }
         in.mi.dwExtraInfo = kInjectMagic;
         SetMessageExtraInfo(kInjectMagic); // 双保险：即便钩子还挂着也会被跳过

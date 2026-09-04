@@ -3,7 +3,8 @@
 namespace {
     // LL 钩子回调只会在安装钩子的线程上执行，用全局指针路由即可。
     std::atomic<Recorder*> g_activeRecorder{ nullptr };
-    HHOOK g_hook = nullptr;
+    HHOOK g_mouseHook = nullptr;
+    HHOOK g_keyboardHook = nullptr;
     double g_qpcFreqMs = 0.0; // QPC 每毫秒计数
 }
 
@@ -52,7 +53,7 @@ bool Recorder::Start(std::wstring& err) {
         WaitForSingleObject(m_hThread, INFINITE);
         CloseHandle(m_hThread);
         m_hThread = nullptr;
-        err = L"安装全局鼠标钩子 (WH_MOUSE_LL) 失败。\n"
+        err = L"安装全局输入钩子 (WH_MOUSE_LL / WH_KEYBOARD_LL) 失败。\n"
               L"可能是安全软件拦截了全局钩子，请检查后重试。";
         return false;
     }
@@ -80,14 +81,18 @@ DWORD WINAPI Recorder::ThreadProc(LPVOID param) {
 
 void Recorder::ThreadMain() {
     m_threadId = GetCurrentThreadId();
-    g_hook = SetWindowsHookExW(WH_MOUSE_LL, &Recorder::HookProc, GetModuleHandleW(nullptr), 0);
-    if (g_hook) {
+    g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, &Recorder::MouseHookProc, GetModuleHandleW(nullptr), 0);
+    g_keyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, &Recorder::KeyboardHookProc, GetModuleHandleW(nullptr), 0);
+    if (g_mouseHook && g_keyboardHook) {
         g_activeRecorder = this;
         QueryPerformanceCounter(&m_qpcStart);
         m_running = true;
+    } else {
+        if (g_mouseHook) { UnhookWindowsHookEx(g_mouseHook); g_mouseHook = nullptr; }
+        if (g_keyboardHook) { UnhookWindowsHookEx(g_keyboardHook); g_keyboardHook = nullptr; }
     }
     SetEvent(m_readyEvent); // 无论成败都唤醒 Start
-    if (!g_hook) return;
+    if (!m_running.load()) return;
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
@@ -95,17 +100,25 @@ void Recorder::ThreadMain() {
         DispatchMessageW(&msg);
     }
     g_activeRecorder = nullptr;
-    UnhookWindowsHookEx(g_hook);
-    g_hook = nullptr;
+    UnhookWindowsHookEx(g_mouseHook);
+    UnhookWindowsHookEx(g_keyboardHook);
+    g_mouseHook = nullptr;
+    g_keyboardHook = nullptr;
 }
 
-LRESULT CALLBACK Recorder::HookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK Recorder::MouseHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     Recorder* self = g_activeRecorder.load();
-    if (nCode == HC_ACTION && self) self->OnHook(wParam, lParam);
-    return CallNextHookEx(g_hook, nCode, wParam, lParam);
+    if (nCode == HC_ACTION && self) self->OnMouse(wParam, lParam);
+    return CallNextHookEx(g_mouseHook, nCode, wParam, lParam);
 }
 
-void Recorder::OnHook(WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK Recorder::KeyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    Recorder* self = g_activeRecorder.load();
+    if (nCode == HC_ACTION && self) self->OnKeyboard(wParam, lParam);
+    return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
+}
+
+void Recorder::OnMouse(WPARAM wParam, LPARAM lParam) {
     auto* m = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam);
 
     // 跳过一切注入事件（含低完整性级别注入）：绝不把回放/其他工具注入的输入录入。
@@ -158,6 +171,45 @@ void Recorder::OnHook(WPARAM wParam, LPARAM lParam) {
         PostMessageW(m_hwndNotify, WM_APP_REC_EVENTS, 0, 0);
 }
 
+void Recorder::OnKeyboard(WPARAM wParam, LPARAM lParam) {
+    auto* k = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam);
+
+    // 同样跳过注入的键盘事件（含低完整性级别注入）
+    if (k->flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)) return;
+    if (k->dwExtraInfo == kInjectMagic || GetMessageExtraInfo() == kInjectMagic) return;
+
+    RecEventType type;
+    switch (wParam) {
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN: type = RecEventType::KeyDown; break;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:   type = RecEventType::KeyUp; break;
+    default: return;
+    }
+
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+
+    RecEvent ev;
+    ev.type = type;
+    GetCursorPos(&ev.pt);       // 键盘事件无坐标，记录当前光标位置供展示
+    ev.scanCode = k->scanCode;
+    ev.virtualKey = k->vkCode;
+    ev.keyExtended = (k->flags & LLKHF_EXTENDED) != 0;
+    ev.offsetMs = static_cast<double>(now.QuadPart - m_qpcStart.QuadPart) / g_qpcFreqMs;
+    // 键盘输入送达拥有键盘焦点的窗口（通常即前台窗口），而非光标下的窗口
+    ev.wnd = CaptureFocusContext();
+
+    {
+        std::lock_guard<std::mutex> lk(m_mutex);
+        if (m_rec) m_rec->events.push_back(std::move(ev));
+    }
+    m_hasLast = false; // 中断移动事件的合并，保持鼠标序列与键盘交错的顺序
+
+    if (!m_notifyPending.exchange(true) && m_hwndNotify)
+        PostMessageW(m_hwndNotify, WM_APP_REC_EVENTS, 0, 0);
+}
+
 WindowSnapshot Recorder::CaptureContext(POINT pt) {
     HWND h = WindowFromPoint(pt);
     if (h) h = GetAncestor(h, GA_ROOT);
@@ -188,6 +240,15 @@ WindowSnapshot Recorder::CaptureContext(POINT pt) {
 
     m_lastSnap = s;
     m_hasLastSnap = true;
+    return s;
+}
+
+WindowSnapshot Recorder::CaptureFocusContext() {
+    HWND h = GetForegroundWindow();
+    if (!h) return {};
+    WindowSnapshot s = CaptureContext({}); // 复用缓存逻辑（不按坐标取窗口）
+    s.hwnd = h;
+    s.foreground = true;
     return s;
 }
 

@@ -4,7 +4,7 @@
 
 // 注入事件标记：回放线程在 SendInput 前 SetMessageExtraInfo()，
 // 钩子回调据此（以及 LLMHF_INJECTED 标志）跳过注入事件，避免把回放重新录入。
-constexpr ULONG_PTR kInjectMagic = 0x48524D49; // "HRMI"
+constexpr ULONG_PTR kInjectMagic = 0x57415249; // "WARI"
 
 enum class RecEventType {
     Move,
@@ -13,6 +13,7 @@ enum class RecEventType {
     MiddleDown, MiddleUp,
     WheelV, WheelH,      // 纵向 / 横向滚轮
     XDown, XUp,          // X1/X2 侧键
+    KeyDown, KeyUp,      // 键盘按下 / 抬起
 };
 
 // 录制时抓取的目标窗口上下文快照（用于回放前的环境一致性校验）
@@ -31,6 +32,9 @@ struct RecEvent {
     RecEventType type = RecEventType::Move;
     POINT pt{};                // 虚拟屏幕绝对坐标（物理像素；多显示器时可能为负）
     int delta = 0;             // 滚轮增量（±120 的倍数）或 X 键编号（1/2）
+    DWORD scanCode = 0;        // 键盘扫描码（仅 KeyDown/KeyUp）
+    DWORD virtualKey = 0;      // 虚拟键码（展示用）
+    bool keyExtended = false;  // 扩展键标志（LLKHF_EXTENDED，如右侧 Ctrl/方向键）
     double offsetMs = 0.0;     // 相对录制开始的时间偏移（毫秒，基于 QPC）
     WindowSnapshot wnd;
 };

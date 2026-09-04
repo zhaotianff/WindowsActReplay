@@ -4,7 +4,7 @@
 param([string]$OutFile)
 
 if ([string]::IsNullOrEmpty($OutFile)) {
-    $OutFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'HistoryRecord\HistoryRecord.ico'
+    $OutFile = Join-Path (Split-Path $PSScriptRoot -Parent) 'WindowsActReplay\WindowsActReplay.ico'
 }
 
 function New-IconImage([int]$size) {
